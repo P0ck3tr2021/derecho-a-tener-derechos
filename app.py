@@ -1,5 +1,3 @@
-Aquí tienes el código completo con la indentación corregida correctamente a 4 espacios y los emojis reparados y limpios para cada sección:
-
 ```python
 import streamlit as st
 
