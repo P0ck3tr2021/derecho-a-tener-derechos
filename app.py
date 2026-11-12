@@ -5,7 +5,10 @@
 # de Espacios Abiertos y el Centro de Periodismo Investigativo
 # ==================================================
 import os
+import unicodedata
 import streamlit as st
+from PIL import Image, ImageDraw, ImageFont
+from streamlit_image_coordinates import streamlit_image_coordinates
 
 # --------------------------------------------------
 # 1. Configuración general
@@ -21,6 +24,7 @@ URL_PROYECTO = "https://espaciosabiertos.org/derecho-a-tener-derechos-2/"
 URL_APP = ""  # Pega aquí el enlace de tu app cuando ya lo tengas
 CARPETA_IMG = "imagenes"
 TOTAL = 7
+MODO_CALIBRACION = True  # Cambia a False cuando termines de ubicar los objetos
 
 # --------------------------------------------------
 # 2. Contenido (separado del diseño)
@@ -369,6 +373,24 @@ DERECHOS = [
 ]
 
 # --------------------------------------------------
+# 2b. Objetos interactivos (hotspots) de cada escena
+# Formato: (nombre del objeto, x %, y %, radio %)
+#   x, y  = centro del objeto, en porcentaje del ancho y alto de la imagen
+#   radio = tamaño de la zona, en porcentaje del ancho de la imagen
+# El orden coincide con las 3 pistas: 1) qué pasa, 2) quién se afecta, 3) qué derecho.
+# Los números de abajo son provisionales: ajústalos con el modo calibración.
+# --------------------------------------------------
+HOTSPOTS = {
+    0: [("La puerta", 82, 55, 9), ("La mochila del cliente", 28, 72, 8), ("El cartel de la pared", 52, 22, 8)],
+    1: [("El folleto del curso", 25, 60, 8), ("La tatuadora", 50, 50, 9), ("La nota sin intérprete", 78, 30, 8)],
+    2: [("El tablón de cartas", 22, 35, 9), ("Los tatuadores frente a la laptop", 52, 60, 9), ("El sello de la agencia", 80, 30, 8)],
+    3: [("El afiche de la vista pública", 22, 35, 9), ("Los dos tatuadores", 55, 62, 9), ("El micrófono vacío", 82, 55, 8)],
+    4: [("Los mensajes sin responder", 25, 58, 8), ("La tatuadora", 52, 50, 9), ("La puerta de la oficina", 82, 40, 9)],
+    5: [("El reloj", 22, 25, 8), ("El cuarto sin ventilación", 78, 50, 10), ("El tatuador agotado", 48, 62, 9)],
+    6: [("El cliente que se burla", 25, 55, 9), ("La tatuadora", 52, 55, 9), ("El dueño", 80, 50, 9)],
+}
+
+# --------------------------------------------------
 # 3. Estado de la aplicación
 # --------------------------------------------------
 ESTADO_INICIAL = {
@@ -556,30 +578,109 @@ def dialogo_decision(i):
             st.rerun()  # cierra la ventana
 
 
+def sin_tildes(texto):
+    """La fuente por defecto de Pillow no dibuja tildes; solo se usa en el lienzo provisional."""
+    return "".join(c for c in unicodedata.normalize("NFD", texto) if unicodedata.category(c) != "Mn")
+
+
+def fuente(tamano):
+    try:
+        return ImageFont.load_default(size=tamano)
+    except TypeError:
+        return ImageFont.load_default()
+
+
+def cargar_escena(i):
+    """Abre imagenes/escena_N.png; si no existe, crea un lienzo provisional."""
+    ruta = os.path.join(CARPETA_IMG, f"escena_{i + 1}.png")
+    real = os.path.exists(ruta)
+    if real:
+        img = Image.open(ruta).convert("RGB")
+    else:
+        img = Image.new("RGB", (1200, 675), "#F2EDE6")
+        d = ImageDraw.Draw(img)
+        d.rectangle([6, 6, 1193, 668], outline="#8C7B6B", width=4)
+        d.text((40, 30), f"Escena {i + 1}: aqui ira tu ilustracion (imagenes/escena_{i + 1}.png)",
+               fill="#2B2320", font=fuente(26))
+    if img.width > 1200:
+        img = img.resize((1200, int(img.height * 1200 / img.width)))
+    return img, real
+
+
+def dibujar_marcas(img, i, reveladas, ayuda, real):
+    """Dibuja ✓ en los objetos encontrados y, si hay ayuda, marcas en los pendientes."""
+    d = ImageDraw.Draw(img, "RGBA")
+    w, h = img.size
+    for k, (nombre, x, y, r) in enumerate(HOTSPOTS[i]):
+        cx, cy, rad = x / 100 * w, y / 100 * h, r / 100 * w
+        caja = [cx - rad, cy - rad, cx + rad, cy + rad]
+        if k in reveladas:
+            d.ellipse(caja, outline=(39, 101, 58, 255), width=6, fill=(39, 101, 58, 90))
+            d.line([(cx - rad * 0.4, cy), (cx - rad * 0.1, cy + rad * 0.4), (cx + rad * 0.45, cy - rad * 0.4)],
+                   fill=(255, 255, 255, 255), width=8)
+        elif ayuda or not real:
+            d.ellipse(caja, outline=(255, 200, 0, 255), width=5, fill=(255, 200, 0, 60))
+            d.text((cx, cy), "?", fill=(40, 30, 0, 255), font=fuente(int(rad * 1.2)), anchor="mm")
+            if not real:
+                d.text((cx, cy + rad + 14), sin_tildes(nombre), fill=(43, 35, 32, 255), font=fuente(20), anchor="mm")
+    return img
+
+
 def pantalla_escena():
     i = st.session_state.actual
     d = DERECHOS[i]
     barra_superior()
     st.markdown(f"## {d['icono']} {d['nombre']}")
-    mostrar_imagen(f"escena_{i + 1}.png", d["alt"], d["icono"])
     bloque(f'<div class="situacion">{d["escena"]}</div>')
 
-    st.markdown("### Descubre las pistas")
     reveladas = st.session_state.pistas.setdefault(i, [])
-    columnas = st.columns(3, gap="medium")
-    for k, (icono, titulo, texto) in enumerate(d["pistas"]):
-        with columnas[k]:
-            if st.button(f"{icono} {titulo}", key=f"pista_{i}_{k}"):
-                if k not in reveladas:
-                    reveladas.append(k)
-            if k in reveladas:
-                st.info(texto)
+    st.markdown("### Toca los objetos de la escena para descubrir las pistas")
+    ayuda = st.checkbox("💡 Mostrar ayuda (marca los objetos pendientes)", key=f"ayuda_{i}")
+
+    img, real = cargar_escena(i)
+    img = dibujar_marcas(img, i, reveladas, ayuda, real)
+    try:
+        click = streamlit_image_coordinates(img, key=f"img_{i}", use_column_width=True)
+    except TypeError:
+        click = streamlit_image_coordinates(img, key=f"img_{i}")
+    st.caption(d["alt"])
+
+    px = py = None
+    if click:
+        px = click["x"] / click["width"] * 100
+        py = click["y"] / click["height"] * 100
+        if st.session_state.get(f"ultimo_click_{i}") != click["unix_time"]:
+            st.session_state[f"ultimo_click_{i}"] = click["unix_time"]
+            w, h = img.size
+            for k, (nombre, x, y, r) in enumerate(HOTSPOTS[i]):
+                dx = (px - x) / 100 * w
+                dy = (py - y) / 100 * h
+                if dx * dx + dy * dy <= (r / 100 * w) ** 2:
+                    if k not in reveladas:
+                        reveladas.append(k)
+                    st.rerun()  # redibuja la imagen con la marca ✓
+            else:
+                st.caption("🔎 Ahí no hay nada. Sigue buscando.")
+
+    st.markdown(f"**Pistas encontradas: {len(reveladas)} de 3**")
+    for k in sorted(reveladas):
+        icono, titulo, texto = d["pistas"][k]
+        nombre = HOTSPOTS[i][k][0]
+        st.info(f"{icono} **{titulo}** · _{nombre}_\n\n{texto}")
+
+    if MODO_CALIBRACION:
+        with st.expander("🛠️ Modo calibración (solo para quien diseña)"):
+            st.write("Toca el centro de cada objeto en la imagen y copia estos valores en HOTSPOTS.")
+            if px is not None:
+                st.code(f"x = {px:.0f}, y = {py:.0f}", language=None)
+            else:
+                st.caption("Aún no has tocado la imagen.")
 
     decision = st.session_state.decisiones.get(i)
     if decision is None:
         todas = len(reveladas) == 3
         if not todas:
-            st.caption("Toca las 3 pistas para poder continuar.")
+            st.caption("Encuentra las 3 pistas para poder continuar.")
         if st.button("Continuar →", type="primary", disabled=not todas, key=f"cont_{i}"):
             dialogo_decision(i)
     else:
