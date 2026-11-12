@@ -7,7 +7,8 @@
 import os
 import unicodedata
 import streamlit as st
-from PIL import Image, ImageDraw, ImageFont
+import streamlit.components.v1 as components
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 try:
     from streamlit_image_coordinates import streamlit_image_coordinates
     HAY_CLICK = True
@@ -403,6 +404,7 @@ ESTADO_INICIAL = {
     "completados": [],    # índices de derechos terminados
     "pistas": {},         # {indice: [pistas reveladas]}
     "decisiones": {},     # {indice: opción escogida}
+    "progreso_mostrado": 0,  # cuántos derechos mostraba la barra la última vez
 }
 for clave, valor in ESTADO_INICIAL.items():
     if clave not in st.session_state:
@@ -453,6 +455,9 @@ st.markdown(
 }
 .pie { text-align: center; color: #4A525A; font-size: 0.9rem; margin-top: 3rem; }
 div[data-testid="stButton"] button { width: 100%; border-radius: 999px; min-height: 3rem; font-weight: 650; }
+@keyframes aparece { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.card-derecho, .situacion, .explicacion, .hero { animation: aparece .5s ease-out both; }
+@media (prefers-reduced-motion: reduce) { .card-derecho, .situacion, .explicacion, .hero { animation: none; } }
 @media (max-width: 700px) {
   .hero h1 { font-size: 2.1rem; }
   .hero { padding: 1.3rem; }
@@ -472,11 +477,19 @@ def bloque(html):
     st.markdown(limpio, unsafe_allow_html=True)
 
 
-def mostrar_imagen(archivo, alt, emoji, altura=300):
-    """Muestra la imagen si existe en imagenes/; si no, un marcador con su descripción."""
+def mostrar_imagen(archivo, alt, emoji, altura=300, gris=False, ancho=None):
+    """Muestra la imagen si existe en imagenes/; si no, un marcador con su descripción.
+    gris=True la convierte a blanco y negro (se usa con los logos)."""
     ruta = os.path.join(CARPETA_IMG, archivo)
     if os.path.exists(ruta):
-        st.image(ruta, caption=alt)
+        img = Image.open(ruta)
+        if gris:
+            img = img.convert("RGBA")
+            fondo = Image.new("RGBA", img.size, (255, 255, 255, 255))
+            fondo.alpha_composite(img)
+            img = ImageOps.autocontrast(fondo.convert("L"))
+        opciones = {"width": ancho} if ancho else {}
+        st.image(img, caption=alt, **opciones)
     else:
         bloque(
             f"""
@@ -488,6 +501,90 @@ def mostrar_imagen(archivo, alt, emoji, altura=300):
         )
 
 
+# Barra de progreso animada: una línea de stencil que se va tatuando con tinta
+# mientras la máquina avanza. Es SVG + SMIL (sin librerías externas).
+PLANTILLA_PROGRESO = """<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+html, body { margin: 0; background: transparent; font-family: Arial, Helvetica, sans-serif; }
+.texto { font-size: 17px; font-weight: 700; color: #1B1B1B; margin: 0 0 0 6px; }
+svg { width: 100%; height: auto; display: block; }
+@keyframes zumbido { 0% { transform: translate(0,0); } 25% { transform: translate(-1px,.7px); }
+  50% { transform: translate(1px,-.7px); } 75% { transform: translate(-.7px,-.7px); } 100% { transform: translate(0,0); } }
+.zumbido { animation: zumbido .07s linear __VIBRACIONES__; }
+</style></head>
+<body>
+<div class="texto">Progreso: __HECHOS__ de __TOTAL__ derechos</div>
+<svg viewBox="0 -30 800 150" role="img" aria-label="Progreso: __HECHOS__ de __TOTAL__ derechos">
+<title>Progreso: __HECHOS__ de __TOTAL__ derechos</title>
+<path id="stencil" d="M 20 70 C 120 30, 180 110, 280 70 S 440 30, 540 70 S 700 110, 780 70"
+ fill="none" stroke="#8E7CC3" stroke-width="5" stroke-dasharray="3 10" stroke-linecap="round" opacity="0.85"/>
+<path id="tinta" d="M 20 70 C 120 30, 180 110, 280 70 S 440 30, 540 70 S 700 110, 780 70"
+ pathLength="100" fill="none" stroke="#111" stroke-width="7" stroke-dasharray="100 100"
+ stroke-dashoffset="__OFF_A__">
+ <animate attributeName="stroke-dashoffset" from="__OFF_A__" to="__OFF_B__" dur="__DUR__s" fill="freeze"/>
+</path>
+<g id="puntos"></g>
+<g id="maquina">
+ <animateMotion dur="__DUR__s" fill="freeze" rotate="0" calcMode="linear"
+  keyPoints="__ANTES__;__AHORA__" keyTimes="0;1">
+  <mpath href="#stencil"/>
+ </animateMotion>
+ <g class="zumbido">
+  <line x1="0" y1="0" x2="0" y2="-12" stroke="#444" stroke-width="2"/>
+  <path d="M -4 -12 L 4 -12 L 6 -34 L -6 -34 Z" fill="#D9D9D9" stroke="#222" stroke-width="2"/>
+  <rect x="-11" y="-58" width="22" height="26" rx="5" fill="#B3261E" stroke="#222" stroke-width="2"/>
+  <rect x="-3" y="-64" width="6" height="8" fill="#222"/>
+ </g>
+</g>
+</svg>
+<script>
+const ANTES = __ANTES__, AHORA = __AHORA__, TOTAL = __TOTAL__;
+let DUR = __DUR__;
+if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+  DUR = 0.01;
+  document.querySelectorAll('animate, animateMotion').forEach(a => a.setAttribute('dur', '0.01s'));
+}
+const stencil = document.getElementById('stencil');
+const largo = stencil.getTotalLength();
+const grupo = document.getElementById('puntos');
+for (let k = 1; k <= TOTAL; k++) {
+  const t = k / TOTAL;
+  const p = stencil.getPointAtLength(largo * t);
+  const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  c.setAttribute('cx', p.x); c.setAttribute('cy', p.y); c.setAttribute('r', 8);
+  c.setAttribute('stroke', '#111'); c.setAttribute('stroke-width', 3); c.setAttribute('fill', '#fff');
+  grupo.appendChild(c);
+  if (t <= ANTES + 1e-9) { c.setAttribute('fill', '#111'); }
+  else if (t <= AHORA + 1e-9) {
+    setTimeout(() => c.setAttribute('fill', '#111'), ((t - ANTES) / (AHORA - ANTES)) * DUR * 1000);
+  }
+}
+</script>
+</body></html>"""
+
+
+def barra_progreso():
+    """Dibuja la barra animada: avanza desde donde estaba la última vez hasta el progreso actual."""
+    hechos = len(st.session_state.completados)
+    antes = st.session_state.get("progreso_mostrado", 0)
+    cambio = hechos != antes
+    dur = 1.8 if cambio else 0.01
+    html = (
+        PLANTILLA_PROGRESO
+        .replace("__HECHOS__", str(hechos))
+        .replace("__TOTAL__", str(TOTAL))
+        .replace("__ANTES__", f"{antes / TOTAL:.4f}")
+        .replace("__AHORA__", f"{hechos / TOTAL:.4f}")
+        .replace("__OFF_A__", f"{100 * (1 - antes / TOTAL):.2f}")
+        .replace("__OFF_B__", f"{100 * (1 - hechos / TOTAL):.2f}")
+        .replace("__DUR__", f"{dur}")
+        .replace("__VIBRACIONES__", str(int(dur / 0.07) + 1 if cambio else 0))
+    )
+    components.html(html, height=150)
+    st.session_state.progreso_mostrado = hechos
+
+
 def barra_superior():
     """Botón de inicio y barra de progreso, presentes en todas las pantallas internas."""
     col_inicio, col_progreso = st.columns([1, 3])
@@ -495,8 +592,7 @@ def barra_superior():
         if st.button("🏠 Inicio", key="btn_inicio"):
             ir_a("home")
     with col_progreso:
-        hechos = len(st.session_state.completados)
-        st.progress(hechos / TOTAL, text=f"Progreso: {hechos} de {TOTAL} derechos")
+        barra_progreso()
 
 
 def pie_de_pagina():
@@ -720,6 +816,8 @@ def pantalla_conoce():
         f"Logo del derecho: {d['nombre']}, de la serie Derechos. Son tuyos. Defiéndelos.",
         d["icono"],
         altura=160,
+        gris=True,
+        ancho=280,
     )
     bloque(
         f"""
@@ -769,6 +867,7 @@ def pantalla_final():
         if st.button("🔄 Jugar de nuevo", key="btn_reiniciar"):
             for clave, valor in ESTADO_INICIAL.items():
                 st.session_state[clave] = type(valor)() if isinstance(valor, (list, dict)) else valor
+            st.session_state.progreso_mostrado = 0
             st.session_state.pantalla = "selector"
             st.rerun()
     if URL_APP:
