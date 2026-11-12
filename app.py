@@ -8,7 +8,11 @@ import os
 import unicodedata
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
-from streamlit_image_coordinates import streamlit_image_coordinates
+try:
+    from streamlit_image_coordinates import streamlit_image_coordinates
+    HAY_CLICK = True
+except ImportError:  # falta la librería: el juego sigue funcionando con botones
+    HAY_CLICK = False
 
 # --------------------------------------------------
 # 1. Configuración general
@@ -639,10 +643,22 @@ def pantalla_escena():
 
     img, real = cargar_escena(i)
     img = dibujar_marcas(img, i, reveladas, ayuda, real)
-    try:
-        click = streamlit_image_coordinates(img, key=f"img_{i}", use_column_width=True)
-    except TypeError:
-        click = streamlit_image_coordinates(img, key=f"img_{i}")
+    click = None
+    if HAY_CLICK:
+        try:
+            click = streamlit_image_coordinates(img, key=f"img_{i}", use_column_width=True)
+        except TypeError:
+            click = streamlit_image_coordinates(img, key=f"img_{i}")
+    else:
+        st.image(img)
+        st.warning(
+            "No se cargó la librería de clic sobre la imagen (revisa requirements.txt). "
+            "Mientras tanto, usa estos botones."
+        )
+        for k, (nombre, _x, _y, _r) in enumerate(HOTSPOTS[i]):
+            if st.button(f"🔎 {nombre}", key=f"obj_{i}_{k}"):
+                if k not in reveladas:
+                    reveladas.append(k)
     st.caption(d["alt"])
 
     px = py = None
